@@ -1,0 +1,35 @@
+﻿# Dependencies
+__pycache__/
+*.pyc
+*.pyo
+node_modules/
+
+# Environment & Secrets
+.env
+*.key
+*.pem
+
+# Large data files
+data/videos/
+data/transcripts/
+data/chroma/
+
+# Logs
+*.log
+streamlit_*.log
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+
+# Screenshots & temp
+*.png
+*.jpg
+web_preview.*
+mimo_docs.html
+deploy.tar.gz
