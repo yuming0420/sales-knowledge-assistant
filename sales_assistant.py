@@ -1,129 +1,54 @@
 ﻿#!/usr/bin/env python3
-"""何总销售知识助手 v3 - RAG检索增强版"""
-import json, os, sys, requests
+"""何总销售助手 CLI - DeepSeek 驱动"""
+import sys, json
 from pathlib import Path
-from dotenv import load_dotenv
-import chromadb
+from core.knowledge import KnowledgeBase
+from core.llm import llm
+from core.history import qa_history
 
-BASE_DIR = Path(__file__).parent
-load_dotenv(BASE_DIR / ".env")
-API_KEY = os.getenv("SILICONFLOW_API_KEY")
-MODEL = os.getenv("SILICONFLOW_MODEL", "deepseek-ai/DeepSeek-V4-Flash")
-API_URL = "https://api.siliconflow.cn/v1/chat/completions"
-EMBED_URL = "https://api.siliconflow.cn/v1/embeddings"
-EMBED_MODEL = "BAAI/bge-large-zh-v1.5"
-CHROMA_PATH = str(BASE_DIR / "data" / "chroma")
-TOP_K = 6
+kb = KnowledgeBase()
+SYSTEM_PROMPT = f"""你是何总的销售知识助手，为山东朱氏药业TOB销售员提供实战指导。
+知识来自抖音博主"何总"的销售培训内容。回答简洁有力，结合医药行业场景，引用何总金句。
 
-# Init ChromaDB
-client = chromadb.PersistentClient(path=CHROMA_PATH)
-collection = client.get_collection("sales_knowledge")
-
-def embed_query(text):
-    resp = requests.post(EMBED_URL,
-        headers={"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"},
-        json={"model": EMBED_MODEL, "input": [text], "encoding_format": "float"},
-        timeout=30)
-    if resp.status_code == 200:
-        return resp.json()["data"][0]["embedding"]
-    return None
-
-def retrieve(query, top_k=TOP_K):
-    """RAG检索：语义搜索最相关的知识块"""
-    emb = embed_query(query)
-    if not emb:
-        return []
-    results = collection.query(query_embeddings=[emb], n_results=top_k)
-    contexts = []
-    for i, (doc, meta, dist) in enumerate(zip(
-        results["documents"][0],
-        results["metadatas"][0],
-        results["distances"][0]
-    )):
-        relevance = max(0, 1 - dist) if dist else 1.0
-        contexts.append({
-            "text": doc,
-            "path": meta.get("path", ""),
-            "title": meta.get("title", ""),
-            "relevance": round(relevance, 3)
-        })
-    return contexts
-
-SYSTEM_PROMPT = """你是何总的销售知识助手，专门为山东朱氏药业的TOB销售员提供实战指导。
-你的知识来自抖音博主"何总"的销售培训内容（七步销售法、客户开发等）。
-
-回答规则：
-1. 优先使用下方检索到的何总知识来回答
-2. 结合医药行业TOB销售场景给出具体建议
-3. 回答简洁有力，像销售教练一样直击要点
-4. 尽量引用何总的金句或核心观点
-5. 如果检索结果不涵盖问题，用通用销售知识补充并诚实说明"""
-
-def ask(question):
-    # RAG retrieve
-    contexts = retrieve(question)
-    if not contexts:
-        return "抱歉，检索暂时不可用，请稍后重试。"
-    
-    # Build context
-    ctx_parts = []
-    for c in contexts:
-        label = c["title"] or c["path"]
-        ctx_parts.append(f"[{label}] {c['text']}")
-    
-    knowledge = "\n\n".join(ctx_parts)
-    
-    messages = [
-        {"role": "system", "content": f"{SYSTEM_PROMPT}\n\n## 检索到的何总知识：\n{knowledge}"},
-        {"role": "user", "content": question}
-    ]
-    
-    resp = requests.post(API_URL,
-        headers={"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"},
-        json={"model": MODEL, "messages": messages, "temperature": 0.5, "max_tokens": 2048},
-        timeout=60)
-    
-    if resp.status_code == 200:
-        return resp.json()["choices"][0]["message"]["content"]
-    return f"API错误 ({resp.status_code})"
+## 何总销售知识库
+{kb.format_for_prompt()}
+"""
 
 def main():
-    print("=" * 50)
-    print("  何总销售知识助手 v3 - RAG增强版")
-    print(f"  向量库: {collection.count()}条 | 检索Top{TOP_K}")
-    print("  输入 quit 退出, help 查看示例")
-    print("=" * 50)
-    print()
-    
-    try:
-        test = retrieve("销售")
-        if test:
-            print(f"RAG就绪: 测试检索到 {len(test)} 条相关块")
+    if len(sys.argv) > 1:
+        q = " ".join(sys.argv[1:])
+        if q == "history":
+            items = qa_history.get_all()
+            print(f"\n问答历史 ({len(items)} 条)\n")
+            for h in items[-10:]:
+                print(f"[{h['time']}] Q: {h['question'][:50]}")
+                print(f"           A: {h['answer'][:80]}…\n")
         else:
-            print("RAG就绪")
-    except Exception as e:
-        print(f"RAG警告: {e}")
-    print()
-    
-    while True:
-        try:
-            q = input("问题: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\n再见！")
-            break
-        if not q: continue
-        if q.lower() in ("quit","exit","q"): print("再见！"); break
-        if q.lower() == "help":
-            print("\n示例: 客户不回消息 | 怎么逼单 | 七步销售法 | 如何邀约 | 开发新客户 | 报价策略\n")
-            continue
-        
-        print("\n思考中...\n")
-        answer = ask(q)
-        print(answer)
-        print()
+            answer = llm.ask(SYSTEM_PROMPT, q)
+            print(answer)
+            qa_history.add(q, answer)
+    else:
+        print("何总销售助手 (DeepSeek)")
+        print(f"知识库: {kb.stats['modules']} 模块")
+        print("history 查看历史 | quit 退出\n")
+
+        while True:
+            try:
+                q = input("问题: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n再见！"); break
+            if not q: continue
+            if q.lower() in ("quit", "exit", "q"): print("再见！"); break
+            if q.lower() == "history":
+                items = qa_history.get_all()
+                for h in items[-10:]:
+                    print(f"  [{h['time']}] {h['question'][:40]}…")
+                continue
+
+            print()
+            for token in llm.ask(SYSTEM_PROMPT, q, stream=True):
+                print(token, end="", flush=True)
+            print()
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        print(ask(" ".join(sys.argv[1:])))
-    else:
-        main()
+    main()
