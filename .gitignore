@@ -33,3 +33,8 @@ desktop.ini
 web_preview.*
 mimo_docs.html
 deploy.tar.gz
+
+fix_import.py
+data/qa_history.json
+data/progress.json
+data/conversations/
